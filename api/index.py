@@ -4,31 +4,27 @@ import json
 import aiohttp
 import asyncio
 import logging
-import random
 import time
-from urllib.parse import parse_qs, urlparse
 from fake_useragent import UserAgent
 
 app = Flask(__name__)
 
-# ====== 🇮🇳 ==============
-# # © Developer = WOODcraft 
-# ========================
-# Configuration
+# 配置参数
 COOKIES_FILE = 'cookies.txt'
 REQUEST_TIMEOUT = 30
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 PORT = 3000
 
-# Setup logging
+# 日志设置
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize user agent rotator
+# UserAgent实例，用于生成随机User-Agent头
 ua = UserAgent()
 
 def get_random_headers():
+    # 生成带随机User-Agent和固定Referer的请求头
     headers = {
         'User-Agent': ua.random,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -41,11 +37,12 @@ def get_random_headers():
         'Sec-Fetch-Site': 'none',
         'Sec-Fetch-User': '?1',
         'Cache-Control': 'max-age=0',
-        'Referer': 'https://terafileshare.com/'
+        'Referer': 'https://terafileshare.com/'  # 你可以根据实际调整
     }
     return headers
 
 def load_cookies():
+    # 从本地cookies.txt文件读取cookies，返回字典
     cookies_dict = {}
     if os.path.exists(COOKIES_FILE):
         with open(COOKIES_FILE, 'r') as f:
@@ -58,6 +55,7 @@ def load_cookies():
     return cookies_dict
 
 def find_between(string, start, end):
+    # 从string中截取介于start和end之间的子串
     try:
         start_index = string.find(start) + len(start)
         end_index = string.find(end, start_index)
@@ -89,6 +87,7 @@ async def make_request(session, url, method='GET', headers=None, params=None, al
                 return response
         except Exception as e:
             last_exception = e
+            logger.warning(f"Request error on attempt {retry_count + 1}: {str(e)}")
             retry_count += 1
             await asyncio.sleep(RETRY_DELAY * (retry_count + 1))
     
@@ -101,24 +100,24 @@ async def fetch_download_link_async(url):
             raise Exception("No cookies found. Please provide valid cookies.")
             
         async with aiohttp.ClientSession(cookies=cookies) as session:
-            # First request to get the initial page
+            # 第一次请求，拿页面内容
             response = await make_request(session, url)
             response_data = await response.text()
             
-            # Extract tokens
+            # 提取jsToken和dplogid
             js_token = find_between(response_data, 'fn%28%22', '%22%29')
             log_id = find_between(response_data, 'dp-logid=', '&')
             
             if not js_token or not log_id:
                 raise Exception("Could not extract required tokens from the page")
             
-            # Parse surl from final URL (after redirects)
+            # 取最终url中的surl参数
             request_url = str(response.url)
             surl = request_url.split('surl=')[1] if 'surl=' in request_url else None
             if not surl:
                 raise Exception("Could not extract surl from URL")
             
-            # Prepare API parameters
+            # 组装API请求参数
             params = {
                 'app_id': '250528',
                 'web': '1',
@@ -135,7 +134,7 @@ async def fetch_download_link_async(url):
                 'root': '1'
             }
             
-            # Second request to get file list
+            # 第二次请求，获取文件列表json
             list_response = await make_request(
                 session,
                 'https://www.1024tera.com/share/list',
@@ -146,7 +145,7 @@ async def fetch_download_link_async(url):
             if 'list' not in list_data or not list_data['list']:
                 raise Exception("No files found in the shared link")
             
-            # Handle directories
+            # 如果第一个是目录，进一步获取目录内文件
             if list_data['list'][0]['isdir'] == "1":
                 dir_params = params.copy()
                 dir_params.update({
@@ -178,7 +177,7 @@ async def fetch_download_link_async(url):
 
 async def get_direct_link(session, dlink):
     try:
-        # First try HEAD request
+        # 先尝试HEAD请求获取重定向Location
         try:
             response = await make_request(
                 session,
@@ -191,7 +190,7 @@ async def get_direct_link(session, dlink):
         except Exception:
             pass
         
-        # Fallback to GET request if HEAD fails
+        # HEAD失败则用GET请求
         response = await make_request(
             session,
             dlink,
@@ -289,9 +288,6 @@ async def api_handler():
             "url": url or "Not provided"
         }), 500
 
-from flask import Response
-import json
-
 @app.route('/')
 def home():
     data = {
@@ -315,5 +311,6 @@ def health_check():
     return Response(json.dumps(data, ensure_ascii=False), mimetype='application/json')
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 3000))
+    port = int(os.environ.get("PORT", PORT))
+    # 线程模式启动，支持异步视图
     app.run(host='0.0.0.0', port=port, threaded=True)
